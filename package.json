@@ -1,0 +1,17 @@
+{
+  "name": "ivy-cloud-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Ivy Geode Mod Macro Cloud Storage (Google Drive)",
+  "main": "server.js",
+  "scripts": {
+    "auth": "node setup_auth.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^140.0.1",
+    "multer": "^1.4.5-lts.1"
+  }
+}
