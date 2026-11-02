@@ -5,6 +5,7 @@ const { google } = require('googleapis');
 const stream = require('stream');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -60,7 +61,6 @@ app.get('/oauth2callback', async (req, res) => {
         REFRESH_TOKEN = tokens.refresh_token;
         oauth2Client.setCredentials(tokens);
 
-        // Zapis do pliku .env jesli dziala lokalnie
         try {
             const envPath = path.join(__dirname, '.env');
             if (fs.existsSync(envPath)) {
@@ -95,7 +95,7 @@ app.get('/oauth2callback', async (req, res) => {
 app.get('/api/macros', async (req, res) => {
     try {
         if (!REFRESH_TOKEN) {
-            return res.status(500).json({ error: 'Serwer nie jest jeszcze zautoryzowany z Dyskiem Google. Wejdz na /auth' });
+            return res.status(500).json({ error: 'Serwer nie jest jeszcze zautoryzowany z Dyskiem Google.' });
         }
 
         const query = `'${FOLDER_ID}' in parents and trashed = false`;
@@ -116,7 +116,6 @@ app.get('/api/macros', async (req, res) => {
                 filename: f.name,
                 size: parseInt(f.size || '0', 10),
                 createdTime: f.createdTime,
-                levelId: props.levelId || 'Brak ID',
                 tps: props.tps || '240',
                 author: props.author || 'Anonim'
             };
@@ -138,24 +137,24 @@ app.post('/api/macros/upload', upload.single('macro_file'), async (req, res) => 
 
         const rawName = (req.body.name || req.file.originalname || 'macro').trim();
         const safeName = rawName.endsWith('.ivy3') ? rawName : `${rawName}.ivy3`;
-        const levelId = (req.body.levelId || 'Unknown').trim();
         const tps = (req.body.tps || '240').trim();
         const author = (req.body.author || 'Anonim').trim();
+        const deleteToken = crypto.randomBytes(16).toString('hex');
 
         const bufferStream = new stream.PassThrough();
         bufferStream.end(req.file.buffer);
 
-        console.log(`[Upload] Wrzucanie "${safeName}" do folderu 5 TB...`);
+        console.log(`[Upload] Wrzucanie "${safeName}" (TPS: ${tps}, Autor: ${author})...`);
 
         const response = await drive.files.create({
             requestBody: {
                 name: safeName,
                 parents: [FOLDER_ID],
-                description: `Ivy Macro | Level: ${levelId} | TPS: ${tps} | Author: ${author}`,
+                description: `Ivy Macro | TPS: ${tps} | Author: ${author}`,
                 appProperties: {
-                    levelId: levelId,
                     tps: tps,
-                    author: author
+                    author: author,
+                    deleteToken: deleteToken
                 }
             },
             media: {
@@ -171,7 +170,8 @@ app.post('/api/macros/upload', upload.single('macro_file'), async (req, res) => 
         res.json({
             success: true,
             id: response.data.id,
-            name: safeName
+            name: safeName,
+            deleteToken: deleteToken
         });
     } catch (err) {
         console.error('[Error /api/macros/upload]', err.message);
@@ -179,7 +179,37 @@ app.post('/api/macros/upload', upload.single('macro_file'), async (req, res) => 
     }
 });
 
-// 6. Pobieranie pliku makra
+// 6. Usuwanie makra (tylko przez autora posiadajacego token)
+app.post('/api/macros/delete/:id', async (req, res) => {
+    try {
+        const fileId = req.params.id;
+        const deleteToken = req.body.deleteToken;
+
+        const file = await drive.files.get({
+            fileId: fileId,
+            fields: 'id, name, appProperties',
+            supportsAllDrives: true
+        });
+
+        const storedToken = file.data.appProperties?.deleteToken;
+        if (storedToken && storedToken !== deleteToken) {
+            return res.status(403).json({ error: 'Brak uprawnień do usunięcia tego makra.' });
+        }
+
+        await drive.files.delete({
+            fileId: fileId,
+            supportsAllDrives: true
+        });
+
+        console.log(`[Delete] Usunięto makro ID: ${fileId} (${file.data.name})`);
+        res.json({ success: true, id: fileId });
+    } catch (err) {
+        console.error('[Error /api/macros/delete]', err.message);
+        res.status(500).json({ error: 'Błąd usuwania makra: ' + err.message });
+    }
+});
+
+// 7. Pobieranie pliku makra
 app.get('/api/macros/download/:id', async (req, res) => {
     try {
         const fileId = req.params.id;
@@ -207,5 +237,4 @@ app.get('/api/macros/download/:id', async (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`Ivy Macro Server dziala na porcie ${PORT}`);
-    console.log(`Autoryzacja dostepna pod: http://localhost:${PORT}/auth`);
 });
